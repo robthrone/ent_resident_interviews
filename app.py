@@ -39,7 +39,7 @@ ranking.columns = ["Rank", "Applicant", "Average Score", "# Evaluations"]
 st.write(f"### Current Rank List — {len(ranking)} applicants")
 st.dataframe(ranking, use_container_width=True, hide_index=True)
 
-# ——— Detail view (per-question averages only) ———
+# ——— DETAIL VIEW WITH RANGE (now NaN-safe) ———
 st.write("#### Select applicant for per-question breakdown")
 selected = st.selectbox("", options=ranking["Applicant"].tolist(), index=0, key="detail")
 
@@ -56,15 +56,24 @@ likert_questions = [
 for q in likert_questions:
     details[q] = pd.to_numeric(details[q], errors="coerce")
 
-question_avgs = details[likert_questions].mean().round(1)
+# Calculate stats safely
+stats = details[likert_questions].agg(['mean', 'min', 'max']).round(1).T
+
+def format_row(row):
+    if pd.isna(row['min']) or pd.isna(row['max']):
+        return f"{row['mean']:.1f}  (—)"          # no one answered this question
+    else:
+        return f"{row['mean']:.1f}  ({int(row['min'])}–{int(row['max'])})"
+
+stats['display'] = stats.apply(format_row, axis=1)
+
 avg_table = pd.DataFrame({
     "Question": [q.split("?")[0] + "?" for q in likert_questions],
-    "Average (out of 10)": question_avgs.values
-})
+    "Average ± Range": stats['display'].values
+}).reset_index(drop=True)
 
 st.write(f"**{selected}** — {details.shape[0]} evaluations")
 st.dataframe(avg_table, hide_index=True, use_container_width=True)
-
 # Download button (always visible)
 csv = ranking.to_csv(index=False).encode()
 st.download_button(
