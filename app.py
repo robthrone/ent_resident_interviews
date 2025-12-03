@@ -7,16 +7,48 @@ st.set_page_config(page_title="ENT Applicant Ranking", layout="centered")
 st.title("ENT Applicant Ranking")
 
 # ——— Upload (disappears after load) ———
+# ——— ULTRA-ROBUST UPLOAD (handles any Total Score / Complete? variation) ———
 if "df" not in st.session_state:
     st.caption("Upload the latest REDCap CSV export to begin")
     uploaded_file = st.file_uploader("", type="csv")
     if uploaded_file is None:
         st.stop()
+
     df_raw = pd.read_csv(uploaded_file)
-    df_raw = df_raw[df_raw["Complete?"] == "Complete"].copy()
-    df_raw["total_score"] = pd.to_numeric(df_raw["Total score"], errors="coerce")
+
+    # 1. Find the "Complete?" column (any case, any variation)
+    complete_col = None
+    for col in df_raw.columns:
+        if 'complete' in str(col).lower():
+            complete_col = col
+            break
+    if complete_col is not None:
+        if df_raw[complete_col].dtype in ['int64', 'float64']:
+            df_raw = df_raw[df_raw[complete_col] == 2].copy()
+        else:
+            df_raw = df_raw[df_raw[complete_col].astype(str).str.contains('complete', case=False, na=False)].copy()
+    else:
+        st.warning("No completion column found — showing all rows")
+
+    # 2. Find the Total Score column (case-insensitive, spaces/underscores)
+    total_col = None
+    for col in df_raw.columns:
+        if 'total' in str(col).lower() and 'score' in str(col).lower():
+            total_col = col
+            break
+    if total_col is None:
+        st.error("Could not find a 'Total Score' column. Check your CSV.")
+        st.stop()
+    
+    df_raw["total_score"] = pd.to_numeric(df_raw[total_col], errors="coerce")
+
+    # 3. Standardize Applicant Name column
+    applicant_col = next((c for c in df_raw.columns if 'applicant' in str(c).lower()), None)
+    if applicant_col and applicant_col != "Applicant Name":
+        df_raw = df_raw.rename(columns={applicant_col: "Applicant Name"})
+
     st.session_state.df = df_raw
-    st.success("Data loaded — refresh page if you have a newer export")
+    st.success(f"Loaded {len(df_raw)} completed evaluations for {df_raw['Applicant Name'].nunique()} applicants")
     st.rerun()
 
 df = st.session_state.df
