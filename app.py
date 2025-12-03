@@ -1,17 +1,17 @@
-# app.py — FINAL CLINICAL VERSION (clean, no clutter)
+# app.py — FINAL WITH DRAG-AND-DROP REORDERING
 import streamlit as st
 import pandas as pd
+from streamlit_sortables import sort_items
 
-st.set_page_config(page_title="Resident Interviews", layout="centered")
-st.title("Resident Interviews")
+st.set_page_config(page_title="ENT Applicant Ranking", layout="centered")
+st.title("ENT Applicant Ranking")
 
-# ——— Upload (disappears after successful load) ———
+# ——— Upload (disappears after load) ———
 if "df" not in st.session_state:
-    st.caption("Upload the latest REDCap CSV to begin")
-    uploaded_file = st.file_uploader("", type="csv")  # empty label = minimal
+    st.caption("Upload the latest REDCap CSV export to begin")
+    uploaded_file = st.file_uploader("", type="csv")
     if uploaded_file is None:
         st.stop()
-    # Load once and store in session state
     df_raw = pd.read_csv(uploaded_file)
     df_raw = df_raw[df_raw["Complete?"] == "Complete"].copy()
     df_raw["total_score"] = pd.to_numeric(df_raw["Total score"], errors="coerce")
@@ -19,11 +19,10 @@ if "df" not in st.session_state:
     st.success("Data loaded — refresh page if you have a newer export")
     st.rerun()
 
-# ——— From here on: data already loaded, no uploader shown ———
 df = st.session_state.df
 st.caption(f"Updated {pd.Timestamp('now').strftime('%B %d, %Y · %I:%M %p')}  |  {len(df)} evaluations")
 
-# Main ranking
+# Main scored ranking
 ranking = (
     df.groupby("Applicant Name", as_index=False)
       .agg(n_evals=("total_score", "count"),
@@ -36,49 +35,88 @@ ranking.insert(0, "Rank", range(1, len(ranking) + 1))
 ranking = ranking[["Rank", "Applicant Name", "avg_score", "n_evals"]]
 ranking.columns = ["Rank", "Applicant", "Average Score", "# Evaluations"]
 
-st.write(f"### Current Rank List — {len(ranking)} applicants")
+st.write(f"### Current Scored Rank List — {len(ranking)} applicants")
 st.dataframe(ranking, use_container_width=True, hide_index=True)
 
-# ——— DETAIL VIEW WITH RANGE (now NaN-safe) ———
+# ——— Dynamic per-question detail view (still fully automatic) ———
 st.write("#### Select applicant for per-question breakdown")
 selected = st.selectbox("", options=ranking["Applicant"].tolist(), index=0, key="detail")
-
 details = df[df["Applicant Name"] == selected].copy()
 
-likert_questions = [
-    "How would you rate their communication skills?",
-    "How well did the applicant respond to the behavioral interview question?",
-    "How would you rate the applicant's resilience?",
-    "How would you rate the applicant's likelihood to thrive in UH's training environment?",
-    "This applicant fulfills a strategic need in the department (e.g. leadership, strong clinical care, research, education)"
-]
+known_non_likert = ["Record ID", "Repeat Instrument", "Repeat Instance", "Survey Identifier",
+                    "Survey Timestamp", "total_score", "Complete?", "Applicant Name"]
 
-for q in likert_questions:
-    details[q] = pd.to_numeric(details[q], errors="coerce")
+likert_questions = []
+for col in details.columns:
+    if col not in known_non_likert:
+        try:
+            details[col] = pd.to_numeric(details[col], errors="coerce")
+            if details[col].notna().any():
+                likert_questions.append(col)
+        except:
+            pass
 
-# Calculate stats safely
-stats = details[likert_questions].agg(['mean', 'min', 'max']).round(1).T
+if likert_questions:
+    stats = details[likert_questions].agg(['mean', 'min', 'max']).round(1).T
+    def format_row(row):
+        if pd.isna(row['min']) or pd.isna(row['max']):
+            return f"{row['mean']:.1f}  (—)"
+        else:
+            return f"{row['mean']:.1f}  ({int(row['min'])}–{int(row['max'])})"
+    stats['display'] = stats.apply(format_row, axis=1)
+    avg_table = pd.DataFrame({
+        "Question": [q.split("?")[0] + ("?" if "?" in q else "") for q in likert_questions],
+        "Average ± Range": stats['display'].values
+    })
+    st.write(f"**{selected}** — {details.shape[0]} evaluations")
+    st.dataframe(avg_table, hide_index=True, use_container_width=True)
 
-def format_row(row):
-    if pd.isna(row['min']) or pd.isna(row['max']):
-        return f"{row['mean']:.1f}  (—)"          # no one answered this question
-    else:
-        return f"{row['mean']:.1f}  ({int(row['min'])}–{int(row['max'])})"
+# ——— DRAG-AND-DROP REORDERING (height fixed) ———
+st.markdown("### Final Rank Order (drag to reorder during meeting)")
 
-stats['display'] = stats.apply(format_row, axis=1)
+# Initialize with scored order
+if "final_order" not in st.session_state:
+    st.session_state.final_order = ranking["Applicant"].tolist()
 
-avg_table = pd.DataFrame({
-    "Question": [q.split("?")[0] + "?" for q in likert_questions],
-    "Average ± Range": stats['display'].values
-}).reset_index(drop=True)
+# The sortable component (no height — auto-sizes)
+ordered = sort_items(st.session_state.final_order, key="sortable_applicants")
 
-st.write(f"**{selected}** — {details.shape[0]} evaluations")
-st.dataframe(avg_table, hide_index=True, use_container_width=True)
-# Download button (always visible)
-csv = ranking.to_csv(index=False).encode()
-st.download_button(
-    "Download full ranking CSV",
-    data=csv,
-    file_name=f"ENT_Ranking_{pd.Timestamp('today').strftime('%Y-%m-%d')}.csv",
-    mime="text/csv"
-)
+# Update session state when reordered
+if ordered != st.session_state.final_order:
+    st.session_state.final_order = ordered
+    st.rerun()
+
+# Show numbered list (with optional styling)
+st.markdown("""
+<style>
+    .sortable-item {
+        font-size: 18px;
+        padding: 10px;
+        background-color: #f0f2f6;
+        margin: 2px 0;
+        border-radius: 4px;
+        color: #111827;               /* NEW: text color */
+    }
+    .sortable-item strong {
+        color: #111827;               /* NEW: index number color */
+    }
+</style>
+""", unsafe_allow_html=True)
+
+for i, name in enumerate(st.session_state.final_order, 1):
+    st.markdown(f'<div class="sortable-item"><strong>{i}.</strong> {name}</div>', unsafe_allow_html=True)
+
+# Download buttons
+col1, col2 = st.columns(2)
+with col1:
+    scored_csv = ranking.to_csv(index=False).encode()
+    st.download_button("Download scored ranking", scored_csv,
+                       f"ENT_Scored_{pd.Timestamp('today').strftime('%Y-%m-%d')}.csv")
+with col2:
+    final_df = pd.DataFrame({"Final Rank": range(1, len(st.session_state.final_order)+1),
+                             "Applicant": st.session_state.final_order})
+    final_csv = final_df.to_csv(index=False).encode()
+    st.download_button("Download FINAL adjusted ranking →",
+                       final_csv,
+                       f"ENT_FINAL_Ranking_{pd.Timestamp('today').strftime('%Y-%m-%d')}.csv",
+                       mime="text/csv")
