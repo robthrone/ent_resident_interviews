@@ -37,7 +37,7 @@ if "df" not in st.session_state:
             total_col = col
             break
     if total_col is None:
-        st.error("Could not find a 'Total Score' column. Check your CSV.")
+        st.error("Could not find a 'total_score' column. Check your CSV.")
         st.stop()
     
     df_raw["total_score"] = pd.to_numeric(df_raw[total_col], errors="coerce")
